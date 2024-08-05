@@ -45,14 +45,14 @@ class ChatController extends _$ChatController {
         ref.read(socketPoolProvider).open(GameController.gameSocketUri(id));
 
     _subscription?.cancel();
-    _subscription = _socketClient.stream.listen(_handleSocketEvent);
+    _subscription = socketGlobalStream.listen(_handleSocketEvent);
 
     ref.onDispose(() {
       _subscription?.cancel();
     });
 
     final readMessagesCount = await _getReadMessagesCount();
-    final messages = await _getMessages();
+    final IList<ChatMessage>? messages = state.value?.messages;
 
     final presetMessageGroup = await ref.watch(
       gameControllerProvider(id).selectAsync(
@@ -61,7 +61,6 @@ class ChatController extends _$ChatController {
     );
 
     return ChatState(
-      alreadySynced: true,
       messages: messages ?? IList(),
       unreadMessages: (messages?.length ?? 0) - readMessagesCount,
       chatPresets: (
@@ -72,32 +71,20 @@ class ChatController extends _$ChatController {
     );
   }
 
-  Future<IList<({String? colour, String message, String? username})>?>
-      _getMessages() {
-    // Once underlying socket has been opened the 'full' sync message will only be received once
-    // so when the provider state is rebuilt we should use the existing state
-    final alreadySynced = state.value?.alreadySynced == true;
-    final IList<Message>? existingMessages = state.value?.messages;
-
-    if (alreadySynced) {
-      return Future.value(existingMessages);
-    } else {
-      return _socketClient.stream.firstWhere((event) {
-        return event.topic == 'full';
-      }).then(
-        (event) => pick(event.data, 'chat', 'lines')
-            .asListOrNull(_messageFromPick)
-            ?.toIList(),
-      );
-    }
+  void setInitialMessages(IList<ChatMessage> messages) {
+    print("Entering 'setInitialMessages");
+    state.whenData((s) {
+      print("Entering state.whenData");
+      // We prepend the messages in case the chat controller's own socket stream
+      // has already received messages beyond 'gameFull'
+      final withInitialMessages = s.messages.insertAll(0, messages);
+      _setMessages(withInitialMessages);
+    });
   }
 
   /// Sends a message to the chat.
   void sendMessage(String message) {
-    _socketClient.send(
-      'talk',
-      message,
-    );
+    ref.read(socketPoolProvider).currentClient.send('talk', message);
   }
 
   // Sends a chat preset to the chat and marks it as sent
@@ -150,7 +137,7 @@ class ChatController extends _$ChatController {
     );
   }
 
-  Future<void> _setMessages(IList<Message> messages) async {
+  Future<void> _setMessages(IList<ChatMessage> messages) async {
     final readMessagesCount = await _getReadMessagesCount();
 
     state = state.whenData(
@@ -161,7 +148,7 @@ class ChatController extends _$ChatController {
     );
   }
 
-  void _addMessage(Message message) {
+  void _addMessage(ChatMessage message) {
     state = state.whenData(
       (s) => s.copyWith(
         messages: s.messages.add(message),
@@ -173,14 +160,7 @@ class ChatController extends _$ChatController {
   void _handleSocketEvent(SocketEvent event) {
     if (!state.hasValue) return;
 
-    if (event.topic == 'full') {
-      final messages = pick(event.data, 'chat', 'lines')
-          .asListOrNull(_messageFromPick)
-          ?.toIList();
-      if (messages != null) {
-        _setMessages(messages);
-      }
-    } else if (event.topic == 'message') {
+    if (event.topic == 'message') {
       final data = event.data as Map<String, dynamic>;
       final message = data['t'] as String;
       final username = data['u'] as String?;
@@ -197,8 +177,7 @@ class ChatState with _$ChatState {
   const ChatState._();
 
   const factory ChatState({
-    required bool alreadySynced,
-    required IList<Message> messages,
+    required IList<ChatMessage> messages,
     required int unreadMessages,
     required ChatPresets chatPresets,
   }) = _ChatState;
@@ -210,9 +189,9 @@ typedef ChatPresets = ({
   PresetMessageGroup? currentPresetMessageGroup
 });
 
-typedef Message = ({String? username, String? colour, String message});
+typedef ChatMessage = ({String? username, String? colour, String message});
 
-Message _messageFromPick(RequiredPick pick) {
+ChatMessage messageFromPick(RequiredPick pick) {
   return (
     message: pick('t').asStringOrThrow(),
     username: pick('u').asStringOrNull(),

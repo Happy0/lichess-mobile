@@ -20,6 +20,7 @@ import 'package:lichess_mobile/src/model/common/socket.dart';
 import 'package:lichess_mobile/src/model/common/speed.dart';
 import 'package:lichess_mobile/src/model/correspondence/correspondence_service.dart';
 import 'package:lichess_mobile/src/model/game/archived_game.dart';
+import 'package:lichess_mobile/src/model/game/chat_controller.dart';
 import 'package:lichess_mobile/src/model/game/game.dart';
 import 'package:lichess_mobile/src/model/game/game_repository.dart';
 import 'package:lichess_mobile/src/model/game/game_socket_events.dart';
@@ -71,6 +72,9 @@ class GameController extends _$GameController {
   Future<GameState> build(GameFullId gameFullId) {
     final socketPool = ref.watch(socketPoolProvider);
 
+    final chatController =
+        ref.read(chatControllerProvider(gameFullId).notifier);
+
     _socketClient =
         socketPool.open(gameSocketUri(gameFullId), forceReconnect: true);
     _socketEventVersion = null;
@@ -85,6 +89,7 @@ class GameController extends _$GameController {
 
     return _socketClient.stream.firstWhere((e) => e.topic == 'full').then(
       (event) async {
+        print("I just got a sicket event: " + event.data.toString());
         final fullEvent =
             GameFullEvent.fromJson(event.data as Map<String, dynamic>);
 
@@ -98,6 +103,16 @@ class GameController extends _$GameController {
             _logger.warning('Could not get post game data: $e', e, s);
             return game;
           });
+        }
+
+        final IList<ChatMessage>? initialMessages =
+            pick(event.data, 'chat', 'lines')
+                .asListOrNull(messageFromPick)
+                ?.toIList();
+
+        if (initialMessages != null) {
+          print("Setting initial messages");
+          chatController.setInitialMessages(initialMessages);
         }
 
         _socketEventVersion = fullEvent.socketEventVersion;
